@@ -19,31 +19,30 @@ frameSequenceRegex = re.compile(r'(\[[0-9-]+\])')
 
 # Stolen from python_get_resolve.py in the examples folder.
 def GetResolve():
-    try:
-    # The PYTHONPATH needs to be set correctly for this import statement to work.
-    # An alternative is to import the DaVinciResolveScript by specifying absolute path (see ExceptionHandler logic)
-        import DaVinciResolveScript as bmd
-    except ImportError:
-        if sys.platform.startswith("darwin"):
-            expectedPath="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
-        elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
-            import os
-            expectedPath=os.getenv('PROGRAMDATA') + "\\Blackmagic Design\\DaVinci Resolve\\Support\\Developer\\Scripting\\Modules\\"
-        elif sys.platform.startswith("linux"):
-            expectedPath="/opt/resolve/libs/Fusion/Modules/"
+	try:
+	# The PYTHONPATH needs to be set correctly for this import statement to work.
+	# An alternative is to import the DaVinciResolveScript by specifying absolute path (see ExceptionHandler logic)
+		import DaVinciResolveScript as bmd
+	except ImportError:
+		if sys.platform.startswith("darwin"):
+			expectedPath="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
+		elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
+			import os
+			expectedPath=os.getenv('PROGRAMDATA') + "\\Blackmagic Design\\DaVinci Resolve\\Support\\Developer\\Scripting\\Modules\\"
+		elif sys.platform.startswith("linux"):
+			expectedPath="/opt/resolve/libs/Fusion/Modules/"
 
-        # check if the default path has it...
-        print("Unable to find module DaVinciResolveScript from $PYTHONPATH - trying default locations")
-        try:
-            import imp
-            bmd = imp.load_source('DaVinciResolveScript', expectedPath+"DaVinciResolveScript.py")
-        except ImportError:
-            # No fallbacks ... report error:
-            print("Unable to find module DaVinciResolveScript - please ensure that the module DaVinciResolveScript is discoverable by python")
-            print("For a default DaVinci Resolve installation, the module is expected to be located in: "+expectedPath)
-            sys.exit()
+		# check if the default path has it...
+		try:
+			import imp
+			bmd = imp.load_source('DaVinciResolveScript', expectedPath+"DaVinciResolveScript.py")
+		except ImportError:
+			# No fallbacks ... report error:
+			print("Unable to find module DaVinciResolveScript - please ensure that the module DaVinciResolveScript is discoverable by python")
+			print("For a default DaVinci Resolve installation, the module is expected to be located in: "+expectedPath)
+			sys.exit()
 
-    return bmd.scriptapp("Resolve")
+	return bmd.scriptapp("Resolve")
 
 
 
@@ -61,6 +60,7 @@ class VersionUpShots:
 	dispatcher = None
 	project = None
 	shots = None
+	_scanning = False
 
 
 	def __init__(self):
@@ -68,6 +68,7 @@ class VersionUpShots:
 		self.shots = []
 		self.buildUI()
 		self.buildShotList()
+
 
 		self.project = resolve.GetProjectManager().GetCurrentProject()
 
@@ -86,6 +87,7 @@ class VersionUpShots:
 		# Only one instance should exist at a time.
 		self.window = ui.FindWindow(self.winID)
 		if self.window:
+			self._scanning = False
 			self.window.Show()
 			self.window.Raise()
 			exit()
@@ -100,7 +102,8 @@ class VersionUpShots:
 			},
 			ui.VGroup([
 				ui.Label({ 'Text': "VFX Version Up Shots Tool", 'Weight':0, 'Font': ui.Font({ 'Family': "Verdana", 'PixelSize': 20 }) }),
-				ui.VGap(20, 0),
+				ui.VGap(5, 0),
+				ui.Label({'ID': 'Status', 'Weight':0}),
 				ui.ComboBox({'ID': 'Track', 'Text':'Video Track'}),
 				ui.Button({'ID': 'ScanVersions', 'Text': 'Scan For Latest Versions', 'Weight':0}),
 				ui.VGap(15, 0),
@@ -123,7 +126,11 @@ class VersionUpShots:
 		self.window.On['ScanVersions'].Clicked = self.scanVersions
 		self.window.On['Submit'].Clicked = self.versionUp
 
+
 	def versionUp(self, event):
+		if self._scanning:
+			return
+
 		if not self.shots:
 			return
 
@@ -152,6 +159,11 @@ class VersionUpShots:
 		dropdown.AddItems(videoTracks)
 
 	def scanVersions(self, event):
+		if self._scanning:
+			return
+		self._scanning = True
+		self.window.Find('Status').SetText('Scanning versions..')
+
 		timeline = self.project.GetCurrentTimeline()
 
 		targetTrack = self.window.Find('Track').CurrentText
@@ -170,15 +182,36 @@ class VersionUpShots:
 					clips += timeline.GetItemListInTrack('video', index)
 					break
 
-		self.shots = [Shot(i) for i in clips]
-		self.shots = [i for i in self.shots if i.isVersionable]
+		tree = self.window.Find('ShotTree')
 
+		self.shots = []
+		self.buildShotList()
+
+		for clip in clips:
+			self.window.Find('Status').SetText('Scanning ' + clip.GetName())
+			
+			shot = Shot(clip)
+			# Skip shots that we can't version up.
+			if shot.isVersionable:
+				self.shots.append(shot)
+				row = tree.NewItem()
+				row.Text[0] = shot.name
+				row.Text[1] = shot.currentVersion
+				row.Text[2] = shot.highestInvalidVersion
+				row.Text[3] = shot.highestVersion
+				tree.AddTopLevelItem(row)
+			
+		
 		self.buildShotList()
 
 		bad = [i for i in self.shots if i.highestVersion != i.highestInvalidVersion]
 
 		if len(bad) > 0:
 			self.alert(bad)
+
+		self.window.Find('Status').SetText('')
+		self._scanning = False
+
 
 
 	def alert(self, shots):
@@ -273,8 +306,16 @@ class Shot:
 		globPath = self.path.replace(version, '*')
 
 		frameRange = frameSequenceRegex.findall(globPath)
+
 		self.isSequence = isSequence = len(frameRange) > 0
-		globPath = re.sub(frameSequenceRegex, '*', globPath)
+		if isSequence:
+			# If we have a sequence in a similarly named folder
+			if len(globPath.split('*')) > 2:
+				# get rid of the file + extension so we run faster
+				globPath = re.sub(r'([^\\\/]+)$', '', globPath)
+			else:
+				globPath = re.sub(frameSequenceRegex, '*', globPath)
+
 
 		results = sorted(list(set([versionRegex.findall(i)[-1] for i in sorted(glob.glob(globPath))])))
 
@@ -290,9 +331,14 @@ class Shot:
 		if not self.isSequence:
 			return versions
 
+		toScan = versions[:]
+		toScan.reverse()
+
 		goodVersions = []
 
-		for version in versions:
+		foundGoodRender = False
+
+		for version in toScan:
 			versionPath = self.path.replace(self.currentVersion, version)
 			sequence = frameSequenceRegex.findall(versionPath)[-1]
 			globPath = versionPath.replace(sequence, '*')
@@ -302,10 +348,14 @@ class Shot:
 			
 			if not self.missingFrames(frames) and len(frames) >= self.duration:
 				goodVersions.append(version)
+				foundGoodRender = True
+				break
 
 		return goodVersions
 
 	def missingFrames(self, frames):
+		if len(frames) == 0:
+			return True
 		start = int(frames[0])
 		i = start
 		for frame in frames:
