@@ -8,41 +8,53 @@ A tool to help export a large number of timelines quickly.
 import sys
 import re
 import glob
+import platform
+import os
+import logging
+from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(logging.StreamHandler())
 
 # Regex to find all version number strings (like v0001)
 # but only match to the last one in each part of the directory.
 # If there are multiple 'versions' in the path, it will ignore everything 
 # but the last one in the file name and each directory folder.
-versionRegex = re.compile(r'([vV]{1}[0-9]+)(?![^\\/]+[\\/]+)(?![^\\/]+[vV]{1})')
+versionRegex = re.compile(r'([vV]{1}[0-9]+)(?![^\\/]+[\\/]+)(?![^\\/]+[vV]{1}\d+)')
 
 frameSequenceRegex = re.compile(r'(\[[0-9-]+\])')
 
 # Stolen from python_get_resolve.py in the examples folder.
 def GetResolve():
 	try:
-	# The PYTHONPATH needs to be set correctly for this import statement to work.
-	# An alternative is to import the DaVinciResolveScript by specifying absolute path (see ExceptionHandler logic)
-		import DaVinciResolveScript as bmd
+		import DaVinciResolveScript as dvr_script
 	except ImportError:
-		if sys.platform.startswith("darwin"):
-			expectedPath="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
-		elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
-			import os
-			expectedPath=os.getenv('PROGRAMDATA') + "\\Blackmagic Design\\DaVinci Resolve\\Support\\Developer\\Scripting\\Modules\\"
-		elif sys.platform.startswith("linux"):
-			expectedPath="/opt/resolve/libs/Fusion/Modules/"
+		if platform.platform().startswith('Windows'):
+			RESOLVE_SCRIPT_API=os.path.expandvars(r"%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting")
+			RESOLVE_SCRIPT_LIB=r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+			os.environ["RESOLVE_SCRIPT_API"] = RESOLVE_SCRIPT_API
+			os.environ["RESOLVE_SCRIPT_LIB"] = RESOLVE_SCRIPT_LIB
+			sys.path.append(RESOLVE_SCRIPT_API + "\\Modules\\")
+			import DaVinciResolveScript as dvr_script
+		elif platform.platform().startswith('Darwin'):
+			RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+			RESOLVE_SCRIPT_LIB="/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+			os.environ["RESOLVE_SCRIPT_API"] = RESOLVE_SCRIPT_API
+			os.environ["RESOLVE_SCRIPT_LIB"] = RESOLVE_SCRIPT_LIB
+			sys.path.append(RESOLVE_SCRIPT_API + "/Modules/")
+			import DaVinciResolveScript as dvr_script
+		else:
+			RESOLVE_SCRIPT_API="/opt/resolve/Developer/Scripting"
+			RESOLVE_SCRIPT_LIB="/opt/resolve/libs/Fusion/fusionscript.so"
+			os.environ["RESOLVE_SCRIPT_API"] = RESOLVE_SCRIPT_API
+			os.environ["RESOLVE_SCRIPT_LIB"] = RESOLVE_SCRIPT_LIB
+			sys.path.append(RESOLVE_SCRIPT_API + "/Modules/")
+			import DaVinciResolveScript as dvr_script
 
-		# check if the default path has it...
-		try:
-			import imp
-			bmd = imp.load_source('DaVinciResolveScript', expectedPath+"DaVinciResolveScript.py")
-		except ImportError:
-			# No fallbacks ... report error:
-			print("Unable to find module DaVinciResolveScript - please ensure that the module DaVinciResolveScript is discoverable by python")
-			print("For a default DaVinci Resolve installation, the module is expected to be located in: "+expectedPath)
-			sys.exit()
 
-	return bmd.scriptapp("Resolve")
+	return dvr_script.scriptapp("Resolve")
 
 
 
@@ -51,7 +63,7 @@ resolve = GetResolve()
 project = resolve.GetProjectManager().GetCurrentProject()
 fusion = resolve.Fusion()
 ui = fusion.UIManager
-
+import DaVinciResolveScript as bmd
 
 
 class VersionUpShots:
@@ -161,47 +173,54 @@ class VersionUpShots:
 	def scanVersions(self, event):
 		if self._scanning:
 			return
+
+		logger.info("Scanning Versions..")
+		
 		self._scanning = True
+		
 		self.window.Find('Status').SetText('Scanning versions..')
 
 		timeline = self.project.GetCurrentTimeline()
+		logger.debug(f"Timeline: {timeline.GetName()}")
 
 		targetTrack = self.window.Find('Track').CurrentText
+		logger.debug(f"Target Track: {targetTrack}")
 		
 		# Grab all clips in selected track
 		clips = []
 		if targetTrack == 'All Tracks':
+			logger.info("Scanning all tracks..")
 			for track in [(i+1, timeline.GetTrackName('video', i+1)) for i in range(timeline.GetTrackCount('video'))]:
 				index, name = track
-				clips += timeline.GetItemListInTrack('video', index)
+				logger.info(f"Scanning track {index} ({name})")
+				found= timeline.GetItemListInTrack('video', index)
+				logger.info(f"Found {len(found)} clips")
+				clips += found
 
 		else:
+
 			for track in [(i+1, timeline.GetTrackName('video', i+1)) for i in range(timeline.GetTrackCount('video'))]:
 				index, name = track
 				if name == targetTrack:
+					logger.info(f"Scanning track {index} ({name})")
 					clips += timeline.GetItemListInTrack('video', index)
+					logger.info(f"Found {len(clips)} clips")
 					break
 
-		tree = self.window.Find('ShotTree')
 
 		self.shots = []
-		self.buildShotList()
 
 		for clip in clips:
-			self.window.Find('Status').SetText('Scanning ' + clip.GetName())
+			clip_name = clip.GetName()
+			logger.info("Scanning " + clip_name)
+			self.window.Find('Status').SetText('Scanning ' + clip_name)
 			
 			shot = Shot(clip)
 			# Skip shots that we can't version up.
-			if shot.isVersionable:
-				self.shots.append(shot)
-				row = tree.NewItem()
-				row.Text[0] = shot.name
-				row.Text[1] = shot.currentVersion
-				row.Text[2] = shot.highestInvalidVersion
-				row.Text[3] = shot.highestVersion
-				tree.AddTopLevelItem(row)
+			self.shots.append(shot)
 			
 		
+		logger.debug("Building shot list..")
 		self.buildShotList()
 
 		bad = [i for i in self.shots if i.highestVersion != i.highestInvalidVersion]
@@ -209,6 +228,7 @@ class VersionUpShots:
 		if len(bad) > 0:
 			self.alert(bad)
 
+		logger.info("Done!")
 		self.window.Find('Status').SetText('')
 		self._scanning = False
 
@@ -217,13 +237,13 @@ class VersionUpShots:
 	def alert(self, shots):
 		alert = self.dispatcher.AddWindow({
 			'ID': self.winID + 'Error',
-			'Geometry': [ 100,100,400,150 ],
+			'Geometry': [ 100,100,500,300 ],
 			'WindowTitle': "Warning!",
 			},
 			ui.VGroup([
 				ui.Label({ 'Text': "Warning!", 'Weight':0, 'Font': ui.Font({ 'Family': "Verdana", 'PixelSize': 20 }) }),
 				ui.VGap(20, 0),
-				ui.Label({'Text': 'Some shots had latest versions that were either \nmissing frames or not long enough. \nUsing lower versions on these shots for now.','WordWrap':True, 'Weight':0}),
+				ui.Label({'Text': 'Some shots had latest versions that were either missing frames or not long enough. \nUsing the highest available version that fits the frame range on these clips for now.','WordWrap':True, 'Weight':0}),
 			])
 		)
 		alert.On[self.winID + 'Error'].Close = lambda ev: alert.Hide()
@@ -253,9 +273,9 @@ class VersionUpShots:
 			for shot in self.shots:
 				row = tree.NewItem()
 				row.Text[0] = shot.name
-				row.Text[1] = shot.currentVersion
-				row.Text[2] = shot.highestInvalidVersion
-				row.Text[3] = shot.highestVersion
+				row.Text[1] = Path(shot.currentVersion).name
+				row.Text[2] = Path(shot.highestInvalidVersion).name if shot.highestInvalidVersion else ""
+				row.Text[3] = Path(shot.highestVersion).name
 				tree.AddTopLevelItem(row)
 
 	def closeEvent(self, event):
@@ -279,6 +299,7 @@ class Shot:
 	def __init__(self, trackItem):
 		global versionRegex
 		self.name = trackItem.GetName()
+		logger.debug(f"Creating new shot object for {self.name}")
 		self.trackItem = trackItem
 		self.duration = trackItem.GetDuration()
 		self.invalidVersions = []
@@ -286,12 +307,18 @@ class Shot:
 		self.mpItem = trackItem.GetMediaPoolItem()
 		self.path = self.mpItem.GetClipProperty('File Path')
 
+		logger.debug("Path: " + self.path)
+
 		# restrict to unique entries. Proper version paths should be left with 1 unique version
 		version = list(set(versionRegex.findall(self.path)))
 
+		logger.debug(f"Extracted version from clip: {versionRegex.findall(self.path)}")
+
 		if len(version) == 0:
 			self.isVersionable = False
-
+			self.currentVersion =  self.path
+			self.highestVersion =  self.path
+			return
 		self.isVersionable = True
 		self.currentVersion = version[-1]
 
@@ -307,6 +334,8 @@ class Shot:
 
 		frameRange = frameSequenceRegex.findall(globPath)
 
+		logger.debug(f"Scanning {self.name}.. version: {version}.\n\tGlob: {globPath}\n\tFrame Range: {frameRange}")
+
 		self.isSequence = isSequence = len(frameRange) > 0
 		if isSequence:
 			# If we have a sequence in a similarly named folder
@@ -316,8 +345,14 @@ class Shot:
 			else:
 				globPath = re.sub(frameSequenceRegex, '*', globPath)
 
+		logger.debug("Glob: " + globPath)
+		logger.debug("is sequence?", isSequence)
+
 
 		results = sorted(list(set([versionRegex.findall(i)[-1] for i in sorted(glob.glob(globPath))])))
+
+		logger.debug("results:")
+		logger.debug(results)
 
 		validResults = self.validateVersions(results)
 
