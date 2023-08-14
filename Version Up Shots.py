@@ -1,14 +1,12 @@
 """Resolve Version Up Shots
-A tool to help manage versions (usually in a VFX context). 
+A tool to help manage versions (usually in a VFX context).
 """
 
 import re
 import glob
 import logging
 from pathlib import Path
-import sys
-import os
-import platform
+import DaVinciResolveScript  # type: *
 
 
 logger = logging.getLogger(__name__)
@@ -27,82 +25,11 @@ VERSION_SCAN_REGEX = re.compile(
 FRAME_SEQUENCE_REGEX = re.compile(r"(\[[0-9-]+\])")
 
 
-def get_resolve_script():
-    """Gets the resolve object.
-    Stolen from python_get_resolve.py in the examples folder.
-    """
-    try:
-        import DaVinciResolveScript as dvr_script  # type:ignore
-    except ImportError:
-        if platform.platform().startswith("Windows"):
-            resolve_script_api = (
-                Path(os.path.expandvars(r"%PROGRAMDATA%"))
-                / "Blackmagic Design"
-                / "DaVinci Resolve"
-                / "Support"
-                / "Developer"
-                / "Scripting"
-            )
-            resolve_script_lib = (
-                Path("C:")
-                / "Program Files"
-                / "Blackmagic Design"
-                / "DaVinci Resolve"
-                / "fusionscript.dll"
-            )
-
-        elif platform.platform().startswith("Darwin"):
-            resolve_script_api = (
-                Path("/")
-                / "Library"
-                / "Application Support"
-                / "Blackmagic Design"
-                / "DaVinci Resolve"
-                / "Developer"
-                / "Scripting"
-            )
-            resolve_script_lib = (
-                Path("/")
-                / "Applications"
-                / "DaVinci Resolve"
-                / "DaVinci Resolve.app"
-                / "Contents"
-                / "Libraries"
-                / "Fusion"
-                / "fusionscript.so"
-            )
-        else:
-            resolve_script_api = (
-                Path("/")
-                / "opt"
-                / "resolve"
-                / "Developer"
-                / "Scripting"
-            )
-            resolve_script_lib = (
-                Path("/")
-                / "opt"
-                / "resolve"
-                / "libs"
-                / "Fusion"
-                / "fusionscript.so"
-            )
-
-        sys.path.append(str(resolve_script_api / "Modules"))
-        os.environ["RESOLVE_SCRIPT_API"] = str(resolve_script_api)
-        os.environ["RESOLVE_SCRIPT_LIB"] = str(resolve_script_lib)
-
-        import DaVinciResolveScript as dvr_script  # type:ignore
-
-    return dvr_script
-
-
-BMD = get_resolve_script()
-RESOLVE = BMD.scriptapp("Resolve")
+RESOLVE = DaVinciResolveScript.scriptapp("Resolve")
 PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
 FUSION = RESOLVE.Fusion()
 UI = FUSION.UIManager
-DISPATCHER = BMD.UIDispatcher(UI)
+DISPATCHER = DaVinciResolveScript.UIDispatcher(UI)
 
 
 class VersionUpShotsWindow:
