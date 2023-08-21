@@ -2,16 +2,24 @@
 A tool to help manage versions (usually in a VFX context).
 """
 
+import contextlib
 import re
 import glob
 import logging
 from pathlib import Path
+import sys
 import DaVinciResolveScript  # type: *
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logger.addHandler(logging.StreamHandler())
+formatter = logging.Formatter(
+    "[%(asctime)s] %(levelname)s - %(message)s",
+    "%m-%d %H:%M:%S",
+)
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # Regex to find all version number strings (like v0001)
 # but only match to the last one in each part of the directory.
@@ -34,24 +42,22 @@ DISPATCHER = DaVinciResolveScript.UIDispatcher(UI)
 
 class VersionUpShotsWindow:
     winID = "com.austinwitherspoon.resolve.VersionUpShots"
-    window = None
-    project = None
-    shots = None
     _scanning = False
 
     def __init__(self):
         self.shots = []
+        self.project = PROJECT
+
         self.create_ui()
-        self.buildShotList()
+        self.build_shot_list()
+        self.populate_track_list()
 
-        self.project = RESOLVE.GetProjectManager().GetCurrentProject()
-
-        self.populateTrackList()
-
-        # Show window
         self.window.Show()
 
     def create_ui(self):
+        """Create the primary UI for the tool.
+        This is using Resolve's weird custom QT(?) version."""
+
         # If the window is already open, cancel this and bring it to the front.
         # Only one instance should exist at a time.
         self.window = UI.FindWindow(self.winID)
@@ -114,10 +120,11 @@ class VersionUpShotsWindow:
 
         # Register Events
         self.window.On[self.winID].Close = self.closeEvent
-        self.window.On["ScanVersions"].Clicked = self.scanVersions
-        self.window.On["Submit"].Clicked = self.versionUp
+        self.window.On["ScanVersions"].Clicked = self.scan_versions
+        self.window.On["Submit"].Clicked = self.version_up_shots
 
-    def versionUp(self, event):
+    def version_up_shots(self, event):
+        """Swap out all versions with the highest available version."""
         if self._scanning:
             return
 
@@ -140,7 +147,7 @@ class VersionUpShotsWindow:
                 row.Text[0] = "!! FAILED !! " + row.Text[0]
             i += 1
 
-    def populateTrackList(self):
+    def populate_track_list(self):
         dropdown = self.window.Find("Track")
         timeline = self.project.GetCurrentTimeline()
 
@@ -153,7 +160,7 @@ class VersionUpShotsWindow:
 
         dropdown.AddItems(videoTracks)
 
-    def scanVersions(self, event):
+    def scan_versions(self, event):
         if self._scanning:
             return
 
@@ -202,12 +209,12 @@ class VersionUpShotsWindow:
             logger.info("Scanning " + clip_name)
             self.window.Find("Status").SetText("Scanning " + clip_name)
 
-            shot = Shot(clip)
-            # Skip shots that we can't version up.
-            self.shots.append(shot)
+            with contextlib.suppress(AttributeError):
+                shot = Shot(clip)
+                self.shots.append(shot)
 
         logger.debug("Building shot list..")
-        self.buildShotList()
+        self.build_shot_list()
 
         bad = [i for i in self.shots if i.highestVersion != i.highestInvalidVersion]
 
@@ -249,9 +256,8 @@ class VersionUpShotsWindow:
 
         alert.Show()
 
-    def buildShotList(self):
+    def build_shot_list(self):
         tree = self.window.Find("ShotTree")
-        # Reset list
         tree.Clear()
 
         header = tree.NewItem()
@@ -351,7 +357,7 @@ class Shot:
                 globPath = re.sub(FRAME_SEQUENCE_REGEX, "*", globPath)
 
         logger.debug("Glob: " + globPath)
-        logger.debug("is sequence?", isSequence)
+        logger.debug("is sequence?" + str(isSequence))
 
         results = sorted(
             list(
@@ -442,12 +448,16 @@ class Shot:
         item = self.findItemInProject(newPath)
 
         if not item:
+            logger.error(f"Could not find {newPath} in project!")
             return False
 
         self.swap(item)
 
         if newPath in self.trackItem.GetMediaPoolItem().GetClipProperty("File Path"):
+            logger.info(f"Successfully updated {self.name} to {newPath}")
             return True
+
+        logger.error(f"Failed to update {self.name} to {newPath}")
 
         return False
 
