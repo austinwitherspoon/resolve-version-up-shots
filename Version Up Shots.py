@@ -6,9 +6,9 @@ import contextlib
 import re
 import glob
 import logging
-from pathlib import Path
 import sys
-import DaVinciResolveScript  # type: *
+from pathlib import Path
+import DaVinciResolveScript
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class VersionUpShotsWindow:
     _scanning = False
 
     def __init__(self):
-        self.shots = []
+        self.shots = []  # type: list[Shot]
         self.project = PROJECT
 
         self.create_ui()
@@ -95,9 +95,19 @@ class VersionUpShotsWindow:
                     ),
                     UI.VGap(15, 0),
                     UI.Label({"Text": "Shots", "Weight": 0}),
-                    UI.Tree({"ID": "ShotTree"}),
+                    UI.Tree({"ID": "ShotTree", "Weight": 50}),
                     UI.VGap(15, 0),
-                    UI.Label({"Text": "Where to import new shots:", "Weight": 0}),
+                    UI.Label({"Text": "Version Up Method", "Weight": 0}),
+                    UI.ComboBox(
+                        {"ID": "method", "Events": {"CurrentTextChanged": True}}
+                    ),
+                    UI.Label(
+                        {
+                            "Text": "Where to import new shots:",
+                            "Weight": 0,
+                            "ID": "LocationLabel",
+                        }
+                    ),
                     UI.ComboBox({"ID": "Location"}),
                     UI.VGap(15, 0),
                     UI.Button(
@@ -117,11 +127,18 @@ class VersionUpShotsWindow:
         self.window.Find("Location").AddItems(
             ["Currently Open Bin", "Same Bin As Original Clip"]
         )
+        self.window.Find("method").AddItems(
+            [
+                "Swap Source Footage In Bin (Project wide)",
+                "Swap Timeline Items (Does not work with retimes!)",
+            ]
+        )
 
         # Register Events
         self.window.On[self.winID].Close = self.closeEvent
         self.window.On["ScanVersions"].Clicked = self.scan_versions
         self.window.On["Submit"].Clicked = self.version_up_shots
+        self.window.On["method"].CurrentTextChanged = self.method_changed
 
     def version_up_shots(self, event):
         """Swap out all versions with the highest available version."""
@@ -139,7 +156,7 @@ class VersionUpShotsWindow:
 
         i = 0
         for shot in self.shots:
-            success = shot.update(importToSourceBin)
+            success = shot.update(importToSourceBin, self.swap_source)
             row = tree.TopLevelItem(i)
             if success:
                 row.Text[1] = shot.highestVersion
@@ -159,6 +176,23 @@ class VersionUpShotsWindow:
         videoTracks.reverse()
 
         dropdown.AddItems(videoTracks)
+
+    @property
+    def swap_source(self):
+        """Checks if the user has selected the option to swap source footage, rather than timeline items"""
+        return "Swap Source" in self.window.Find("method").CurrentText
+
+    def method_changed(self, event):
+        selection = event["Text"]
+        logger.debug(f"Method changed to '{selection}'")
+        import_location_label = self.window.Find("LocationLabel")
+        import_location_dropdown = self.window.Find("Location")
+        if self.swap_source:
+            import_location_label.Hide()
+            import_location_dropdown.Hide()
+        else:
+            import_location_label.Show()
+            import_location_dropdown.Show()
 
     def scan_versions(self, event):
         if self._scanning:
@@ -202,12 +236,12 @@ class VersionUpShotsWindow:
                     logger.info(f"Found {len(clips)} clips")
                     break
 
-        self.shots = []
+        self.shots = []  # type: list[Shot]
 
         for clip in clips:
             clip_name = clip.GetName()
-            logger.info("Scanning " + clip_name)
-            self.window.Find("Status").SetText("Scanning " + clip_name)
+            logger.info(f"Scanning {clip_name}")
+            self.window.Find("Status").SetText(f"Scanning {clip_name}")
 
             with contextlib.suppress(AttributeError):
                 shot = Shot(clip)
@@ -244,7 +278,10 @@ class VersionUpShotsWindow:
                     UI.VGap(20, 0),
                     UI.Label(
                         {
-                            "Text": "Some shots had latest versions that were either missing frames or not long enough. \nUsing the highest available version that fits the frame range on these clips for now.",
+                            "Text": (
+                                "Some shots had latest versions that were either missing frames or not long enough.\n"
+                                "Using the highest available version that fits the frame range on these clips for now."
+                            ),
                             "WordWrap": True,
                             "Weight": 0,
                         }
@@ -292,26 +329,26 @@ class VersionUpShotsWindow:
 
 class Shot:
     name = None
-    trackItem = None
     currentVersion = None
     highestVersion = None
     highestInvalidVersion = None
     isVersionable = False
-    mpItem = None
     path = None
     duration = None
     isSequence = False
     invalidVersions = None
 
-    def __init__(self, trackItem):
+    def __init__(self, trackItem):  # type: (DaVinciResolveScript.TimelineItem) -> None
         global VERSION_SCAN_REGEX
         self.name = trackItem.GetName()
         logger.debug(f"Creating new shot object for {self.name}")
-        self.trackItem = trackItem
+        self.trackItem = trackItem  # type: DaVinciResolveScript.TimelineItem
         self.duration = trackItem.GetDuration()
         self.invalidVersions = []
 
-        self.mpItem = trackItem.GetMediaPoolItem()
+        self.mpItem = (
+            trackItem.GetMediaPoolItem()
+        )  # type: DaVinciResolveScript.MediaPoolItem
         self.path = self.mpItem.GetClipProperty("File Path")
 
         logger.debug("Path: " + self.path)
@@ -390,8 +427,6 @@ class Shot:
 
         goodVersions = []
 
-        foundGoodRender = False
-
         for version in toScan:
             versionPath = self.path.replace(self.currentVersion, version)
             sequence = FRAME_SEQUENCE_REGEX.findall(versionPath)[-1]
@@ -409,7 +444,6 @@ class Shot:
 
             if not self.missingFrames(frames) and len(frames) >= self.duration:
                 goodVersions.append(version)
-                foundGoodRender = True
                 break
 
         return goodVersions
@@ -426,8 +460,7 @@ class Shot:
                 return True
         return False
 
-    def update(self, importToSourceBin=False):
-        global RESOLVE, PROJECT
+    def update(self, importToSourceBin=False, swap_source=False):
         ms = RESOLVE.GetMediaStorage()
 
         if self.currentVersion == self.highestVersion:
@@ -438,6 +471,19 @@ class Shot:
             newPath = newPath.replace(
                 re.findall(r"[\\\/]{1}([^\\\/]+)(?!.+)", newPath)[-1], ""
             )
+
+        if swap_source:
+            if newPath.endswith("\\") or newPath.endswith("/"):
+                newPath = newPath[:-1]
+            logger.debug("Swapping source footage")
+            self.mpItem.ReplaceClip(newPath)
+            # check if the clip was replaced
+            if newPath in self.mpItem.GetClipProperty("File Path"):
+                logger.info(f"Successfully updated {self.name} to {newPath}")
+                return True
+            else:
+                logger.error(f"Failed to update {self.name} to {newPath}")
+                return False
 
         if importToSourceBin:
             folder = self.findFolder(self.mpItem)
@@ -453,7 +499,7 @@ class Shot:
 
         self.swap(item)
 
-        if newPath in self.trackItem.GetMediaPoolItem().GetClipProperty("File Path"):
+        if newPath in self.mpItem.GetClipProperty("File Path"):
             logger.info(f"Successfully updated {self.name} to {newPath}")
             return True
 
