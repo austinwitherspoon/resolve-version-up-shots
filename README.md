@@ -16,7 +16,7 @@ INSTALLATION:
 Download the .py file and insert into `C:\ProgramData\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Edit` or the equivelent on your OS.
 
 ---
-Tested on DaVinci Resolve Studio 18.1 on Windows 11. Should work on other operating systems, but I don't have access to test those!
+Tested on DaVinci Resolve Studio 18.5 on Windows 11. Should work on other operating systems, but I don't have access to test those!
 Requires python 3.6+ to be installed on your computer, and resolve should be configured to access it.
 
 You made need to enable Local or Network script access in DaVinci Resolve -> Preferences -> General -> External Scripting
