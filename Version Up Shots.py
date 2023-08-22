@@ -7,8 +7,9 @@ import re
 import glob
 import logging
 import sys
+import os
+import platform
 from pathlib import Path
-import DaVinciResolveScript
 
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,36 @@ VERSION_SCAN_REGEX = re.compile(
 FRAME_SEQUENCE_REGEX = re.compile(r"(\[[0-9-]+\])")
 
 
-RESOLVE = DaVinciResolveScript.scriptapp("Resolve")
+
+# Stolen from python_get_resolve.py in the examples folder.
+def get_dvr():
+    try:
+        import DaVinciResolveScript as dvr_script
+    except ImportError:
+        if platform.platform().startswith('Windows'):
+            RESOLVE_SCRIPT_API = os.path.expandvars(r"%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting")
+            RESOLVE_SCRIPT_LIB = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+            sys.path.append(RESOLVE_SCRIPT_API + "\\Modules\\")
+        elif platform.platform().startswith('Darwin'):
+            RESOLVE_SCRIPT_API = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+            RESOLVE_SCRIPT_LIB = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+            sys.path.append(RESOLVE_SCRIPT_API + "/Modules/")
+        else:
+            RESOLVE_SCRIPT_API = "/opt/resolve/Developer/Scripting"
+            RESOLVE_SCRIPT_LIB = "/opt/resolve/libs/Fusion/fusionscript.so"
+            sys.path.append(RESOLVE_SCRIPT_API + "/Modules/")
+            
+        os.environ["RESOLVE_SCRIPT_API"] = RESOLVE_SCRIPT_API
+        os.environ["RESOLVE_SCRIPT_LIB"] = RESOLVE_SCRIPT_LIB
+        import DaVinciResolveScript as dvr_script
+    return dvr_script
+
+DVR = get_dvr()
+RESOLVE = DVR.scriptapp("Resolve")
 PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
 FUSION = RESOLVE.Fusion()
 UI = FUSION.UIManager
-DISPATCHER = DaVinciResolveScript.UIDispatcher(UI)
+DISPATCHER = DVR.UIDispatcher(UI)
 
 
 class VersionUpShotsWindow:
